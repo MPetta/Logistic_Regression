@@ -1,0 +1,575 @@
+---
+title: "Predicting Loan Defaults with Logistic Regression"
+author: "Marc Petta"
+date: ""
+output:
+  html_document:
+    df_print: paged
+---
+### Introduction
+
+To illustrate the benefits of foresight and the use of predictive modeling, what follows will seek to predict loan defaults given past information. The past information used in this model will be a dataset of random loan information which will be reviewed, cleaned, and analyzed to determine its fit for predictive modeling. The cleaned dataset will be reviewed by summary statistics, graphs, and plots for problematic correlation, inconsistencies, distributions, and missing values to be transformed or removed. The cleaned dataset will randomly be split in to test and train data, and fit to a logistic regression model. The output of the model will be reviewed and tuned. The final, most effective model will be ran with the actual test dataset parsed earlier. A summary of findings will be developed from the final model. In order to determine loan defaults, the focus on this logistic regression will on the whether or not the loans are in good or bad status. A loan having a status of "Bad" will be reflective of a loan default. The variables both categorical and quantitative will be scrutinized before modeling and the best fit model will support findings in the final summary.  
+
+### Preparing and Cleaning the Data
+
+The dataset contains a random sample of information about loans and will serve to predict defaults on loans for the population. The sample has 50,000 records of loans less than $35,000. There are 30 available variables.
+
+#### Load Data
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
+# set up
+library(dplyr)
+library(readxl)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+library(car)
+library(VIM)
+library(corrplot)
+library(cowplot)
+
+# read in data and set data type
+loan = read_excel('loans50k.xlsx',  col_types = c("numeric", "numeric", "text", "numeric", "numeric", "text", "text", "text", "text", "numeric", "text", "text", "text", "text", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric"))
+
+```
+
+#### Counts for missing and unique values
+
+After the data set has been loaded and the column types are confirmed to be correct a check will be performed to count the amount of missing and unique values
+
+```{r, echo= FALSE, warning=FALSE}
+# view plots of NA's
+aggr_plot <- aggr(loan, col=c('aquamarine','cornflowerblue'), numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+
+```
+
+
+```{r, results='hide'}
+# get counts for NA's and unique values
+sapply(loan,function(x) sum(is.na(x)))
+sapply(loan, function(x) length(unique(x)))
+
+```
+
+The unique records counts show the variable "loanID" to be unique for each record and serves as an identifier. All variables show at least one missing value, which after viewing the data as a table, these missing values can be attributed to one problematic row. Beyond these, missing values are found only in the variables "employment", "revolRatio", "bcOpen", and "bcRatio".
+
+#### Consideration of each variables value for inclusion
+
+Not all variables will be used, as they do not all hold value for determining loan defaults. The following variables are removed due to this irrelevance: “employment" and "loanID". The “employment” variable holds too many varying categorical values to be useful. Binning them into useful categories is not an option as they too would be too numerous to be significant. The "loanID" variable has also been removed from this dataset. The unique identifier will not be needed in the modeling that follows.
+
+#### Data Processing
+
+```{r}
+# remove problematic row with no data
+loan <- filter(loan, loanID != 656728)
+# remove irrelevant variables
+loan <- select(loan,-c(employment,loanID))
+# loans that are late, current (being paid), or in grace period are removed
+loan <- filter(loan, status != "Current" & status != "In Grace Period" & status != "Late (31-120 days)" & status != "Late (16-30 days)")
+
+```
+
+After the first round of processing, there is still a substantial sample size for our dataset with 34655 observations. Null values exist in this cleaned dataset. New counts will be generated for unique and missing values.
+
+#### New counts for missing and unique values
+
+```{r, results='hide', echo=FALSE}
+# get counts for NA's and unique values
+sapply(loan,function(x) sum(is.na(x)))
+sapply(loan, function(x) length(unique(x)))
+
+```
+
+Removing the problematic row also removed the null values found in that row across all the variables. Null values now only exist in "revolRatio", "bcOpen", and "bcRatio". The null values contained in "revolRatio" are also contained in the records that have null values in "bcRatio".
+
+#### Remove Null Values
+
+Due to the substantial size and given the variables these nulls exist in, removing observations with these null values will not have an impact on the analysis. What follows will remove these null values for the data set.
+
+```{r, echo=FALSE}
+# filter out nulls
+loan <- filter(loan, length != "n/a")
+loan <-
+  loan %>% drop_na()
+
+```
+
+#### Recoding
+
+For analysis, it will be necessary to create some variables from existing ones. The "status" variable will be recoded to either "Good" or "Bad" to illustrate the status of the loan. The "verified" variable will be recoded so that there are only two factors; "verified" and "not verified". The variable "reason" has many categories, which can be combined into less and more meaningful categories. Redundant categories, such as "credit" and "debt", and "housing" and "home improvement" were combined. All others were combined in "other". The variable "state" will be categorized in to the two major geographic regions of the US: the west and the east. This geographic split of states in to two categories roughly follows the 100the meridian.
+
+```{r, echo=FALSE}
+# recode status 
+loan <-
+  loan %>%
+  mutate(status = as.factor(case_when(
+    status == "Charged Off" ~ "Bad",
+    status == "Default" ~ "Bad",
+    TRUE ~ "Good"
+  )))
+# recode verified 
+loan <-
+  loan %>%
+  mutate(verified = as.factor(case_when(
+    verified == "Source Verified" ~ "Verified",
+    verified == "Verified" ~ "Verified",
+    TRUE ~ "Not Verified"
+  )))
+# recode reason 
+loan <-
+  loan %>%
+  mutate(reason= as.factor(case_when(
+    reason == "credit_card" ~ "debt_consolidation",
+    reason == "house" ~ "home_improvement",
+    TRUE ~ "other"
+  )))
+# recode state 
+loan <-
+  loan %>%
+  mutate(state= as.factor(case_when(
+    state == "WA" ~ "west",
+    state == "OR" ~ "west",
+    state == "CA" ~ "west",
+    state == "AZ" ~ "west",
+    state == "NV" ~ "west",
+    state == "ID" ~ "west",
+    state == "MO" ~ "west",
+    state == "WY" ~ "west",
+    state == "CO" ~ "west",
+    state == "NM" ~ "west",
+    state == "TX" ~ "west",
+    state == "OK" ~ "west",
+    state == "KS" ~ "west",
+    state == "SD" ~ "west",
+    state == "ND" ~ "west",
+    state == "NE" ~ "west",
+    state == "UT" ~ "west",
+    TRUE ~ "east"
+  )))
+
+```
+
+
+#### Examining for correlation
+
+The data, cleaned of missing values and recoded for analytic value, needs to be examined to determine any highly correlated variables.
+
+```{r}
+# get only numeric columns
+x = loan[ , purrr::map_lgl(loan, is.numeric)]
+# for readability get dataframe containing only variables we suspect to be correlated to plot in pairs
+x1 = x[c(1,2,4,13,19,20)]
+# scatterplots for each
+pairs(x1, col=loan$status)
+
+```
+
+Looks like there is some correlation occuring with "totalBal" and "totalLim". Lets take a closer look and illustrate higher correlation relative to circle size in the following matrix.
+
+```{r}
+# plot correlation matrix
+correlations <- cor(x1)
+corrplot(correlations, title = "Correlation Plot", method="circle", outline = T, addgrid.col = "darkgray",tl.col = "indianred4")
+
+```
+
+The plots indicate correlation for "totalBal" and "totalLim" are quite high, revealing evidence of being highly correlated. These variable will be removed from the dataset.
+
+```{r}
+# remove highly correlated variables
+loan <- select(loan,-c(totalBal,totalLim))
+x <- select(x,-c(totalBal,totalLim))
+
+```
+
+### Exploring and Transforming the Data
+
+Now that the dataset is cleaned and in the form needed to proceed, some initial exploratory data analysis of predictor variables is necessary. To determine the main characteristics of the data, and for further review, summary statistics and visualizations will be made to evaluate each variable. 
+
+#### Summary Statistcs
+
+Printed summary statistics have been suppressed for brevity, but still in code to illustrate approach.
+
+```{r, results='hide'}
+summary(loan)
+
+```
+
+The summary statistic reveal the amount of each loan ranges from 1000 to 35000 dollars with monthly payments ranging around 30 to 1400 dollars. These values seem consistent with the loan amounts and expected payments. We see several quantitative variables with outliers. Among these variables are "income" and "totalBal". These variables will require further examination.   
+
+### Visualizations
+
+Visualization of both categorical and quantitative variables will reveal further the main characteristics of each. Specific variables, identified as being of interest in the summary statistics, will be examined. 
+
+#### Barplots of some of the categorical variables
+
+```{r, echo=FALSE}
+Pterm <- ggplot(data=loan, aes(x=term)) + 
+      geom_bar(fill="coral4", colour = "red", stat = "count") + 
+      xlab("Length of Term of Loan") 
+
+Pgrade <- ggplot(data=loan, aes(x=grade)) +
+      geom_bar(fill="coral1", colour = "red", stat = "count") +
+      xlab("Grade of Loan") 
+
+Pver <- ggplot(data=loan, aes(x=verified)) +
+      geom_bar(fill="coral4", colour = "red", stat = "count") +
+      xlab("Verified Income") 
+
+Pstatus <- ggplot(data=loan, aes(x=status)) +
+      geom_bar(fill="coral1", colour = "red", stat = "count") +
+      xlab("Loan Status")
+
+grid.arrange(Pterm, Pgrade, Pver, Pstatus, nrow=2,
+             top="View of Categorical Variables")
+
+```
+
+Not all categorical variables will be examined here. What the plots above reveal is some of the main characteristics of this dataset. We see that the a large majority of the loans have a term of 36 months. The bar plots also reveal most grades of each loan are centered around the categories "B" and "C". A large amount of the loans also had income verified, although interestingly enough, there is an amount loans where income was not verified. Finally, we can see that the status of loans mostly fall into the category of "Good". This is the variable we are most interested in examining and will be focusing the model on it. 
+
+#### Density and Histograms for Quantitative Predictor Variables
+
+The summary statistics that reveal considerable outliers in some quantitative predictor variables will be visually explored:
+
+```{r, warning=FALSE, message=F}
+library(cowplot)
+# get plots for columns in x =
+my_plots <- lapply(names(x), function(var_x){
+  p <- 
+    ggplot(x) +
+    aes_string(var_x)
+  if(is.numeric(x[[var_x]])) {
+    p <- p + geom_histogram(aes(y=..density..), colour="black", fill="white") + geom_density(alpha=.2, fill="#FF6666") 
+  } else {
+    #p <- p + geom_bar() #for ploting categorical 
+  } 
+})
+# get plots with call to cowplot
+plot_grid(plotlist = my_plots, nrow = 6, ncol = 3, align = "hv")
+
+```
+
+The histograms for both "income" and "totalRevbal" show these quantitative variables to be strongly skewed and contain some extreme outliers. This would be expected given the difference in each individuals income and we would expect to see this with the total balance individuals carry in their respective credits balances. We also find the plots for variables totalRevLim, accOpen24, openAcc, and totalIlLim reveal some extreme outliers as well. These quantitative variables will need to be transformed to make them better suited for analysis. 
+
+### Transformations
+
+To prevent extreme values from greatly influencing the resulting model, several variables will be log transformed. These variable were chosen to be transformed due to their applicability as predictors and their extreme outliers.
+
+```{r, echo=FALSE}
+#create new variables from log transformations
+loan$log_income <- log(loan$income +1)
+loan$log_totalRevBal <- log(loan$totalRevBal +1)
+loan$log_totalRevLim <- log(loan$totalRevLim +1)
+loan$log_totalIlLim <- log(loan$totalIlLim +1)
+loan$log_accOpen24 <- log(loan$accOpen24 +1)
+loan$log_openAcc <- log(loan$openAcc +1)
+loan$log_avgBal <- log(loan$avgBal +1)
+loan$log_bcOpen <- log(loan$bcOpen +1)
+loan$log_totalBcLim <- log(loan$totalBcLim +1)
+loan$log_inq6mth <- log(loan$inq6mth +1)
+loan$log_delinq2yr <- log(loan$delinq2yr +1)
+
+#remove variables which are to be replaced with the above new transformed variables
+loan$income <- NULL
+loan$totalRevBal <- NULL
+loan$totalRevLim <- NULL
+loan$totalIlLim <- NULL
+loan$accOpen24 <- NULL
+loan$openAcc <- NULL
+loan$avgBal <- NULL
+loan$bcOpen <- NULL
+loan$totalBcLim <- NULL
+loan$inq6mth <- NULL
+loan$delinq2yr <- NULL
+
+
+```
+
+
+#### Plot transformations 
+
+```{r, fig.width=6, fig.height=6,echo=FALSE}
+P10 <- qplot(loan$log_income,
+        geom="histogram",
+        main = "Income",
+        binwidth = .5,
+        fill=I("pink"),
+        col=I("red"))
+P11 <- qplot(loan$log_totalRevBal,
+        geom="histogram",
+        main = "log_totalRevBal",
+        binwidth = 1,
+        fill=I("pink"),
+        col=I("red"))
+P13 <- qplot(loan$log_totalRevBal,
+        geom="histogram",
+        main = "log_totalRevBal",
+        binwidth = 1,
+        fill=I("pink"),
+        col=I("red"))
+P14 <- qplot(loan$log_totalIlLim,
+        geom="histogram",
+        main = "totalIlLim",
+        binwidth = .5,
+        fill=I("pink"),
+        col=I("red"))
+P15 <- qplot(loan$log_accOpen24,
+        geom="histogram",
+        main = "log_accOpen24",
+        binwidth = 1,
+        fill=I("pink"),
+        col=I("red"))
+P16 <- qplot(loan$log_openAcc,
+        geom="histogram",
+        main = "openAcc",
+        binwidth = .5,
+        fill=I("pink"),
+        col=I("red"))
+P17 <- qplot(loan$log_avgBal,
+        geom="histogram",
+        main = "log_avgBal",
+        binwidth = 1,
+        fill=I("pink"),
+        col=I("red"))
+P18 <- qplot(loan$log_bcOpen,
+        geom="histogram",
+        main = "bcOpen",
+        binwidth = .5,
+        fill=I("pink"),
+        col=I("red"))
+P19 <- qplot(loan$log_totalBcLim,
+        geom="histogram",
+        main = "log_totalBcLim",
+        binwidth = 1,
+        fill=I("pink"),
+        col=I("red"))
+
+grid.arrange(P10,P11,P13,P14,P15,P16,P17,P18,P19, nrow=5,
+             top="View Transformed Data")
+
+```
+
+The transformed variables plotted above reveal variables more appropriate than those which they replaced for modeling.
+
+### Initial Exploration
+
+```{r, fig.width=6, fig.height=3, echo=FALSE}
+P5 <- ggplot(loan, aes(x = status, y = log_income))+
+  geom_boxplot()
+P7 <- ggplot(loan, aes(x = status, y = amount))+
+  geom_boxplot()
+P8 <- ggplot(loan, aes(x = status, y = payment))+
+  geom_boxplot()
+grid.arrange(P5, P7, P8, nrow=1,
+             top= "Income/Amount/Payment by Good/Bad Loan Status")
+
+```
+
+The boxplots above reveal information on income, loan amounts, and payments as they relate to the status of the loan. The boxplot for income suggest that between good and bad loans the distributions are roughly the same. As might be expected the good loans have some higher outliers. The amount of the loans appear to be slightly higher for bad loans. This seems to make sense as the more one owes the more difficulty they may have in repaying. Payments appear to be somewht simialr across both good and bad.
+
+### Logistic Model
+
+#### Split test and train datasets
+
+Now that we have examined the data and have a better understanding of the dataset as a whole, we can apply that data to a model. As noted, we have chosen logistic regression as being the appropriate method for analysis. At this stage, the first step will be to separate the current dataset in to two separate datasets; one for test, and one for train. The training dataset will contain 80% of the observations and the remaining 20% will be applied to the test dataset. Set.seed will be applied to ensure reproducability.
+
+```{r, results="hide"}
+set.seed(123)
+smp_siz = floor(0.8*nrow(loan))
+train_ind = sample(seq_len(nrow(loan)),size = smp_siz)
+train =loan[train_ind,]
+test=loan[-train_ind,]
+#Review coding on status
+contrasts(train$status)
+contrasts(test$status)
+
+```
+
+#### Fit model
+
+We know from the initial exploration of the dataset that one of the remaining variables is not appropriate to fit in the model. The variable TotalPaid has been identified as not being an effective predictor due to it not being determined until after the loan has been issued. For this reason we will remove it from the train dataset. It will remain in the test dataset for further analysis. In order to choose the best model to fit we will use AIC to determine which predictors will be included.
+
+```{r, results="hide"}
+#Remove totalPaid from train data
+train$totalPaid <- NULL
+
+#Fit the full model and test AIC for best fit with step
+train.out.full <- glm(status~.,data = train, family = "binomial")
+step(train.out.full, direction = "backward")
+
+```
+
+The result of the step testing of AIC indicates that 21 of the 28 variables in the test data should be used for the model. This newly identified model is fit to the logistic model and assigned to an object for further analysis. 
+
+```{r}
+#Fit the train model
+train.out <- glm(status ~ amount + term + payment + grade + home + 
+    verified + state + debtIncRat + pubRec + revolRatio + totalAcc + 
+    bcRatio + log_income + log_totalRevLim + log_totalIlLim + 
+    log_accOpen24 + log_openAcc + log_avgBal + log_bcOpen + log_inq6mth + 
+    log_delinq2yr, family = "binomial", data = train)
+
+```
+
+The train model will be used for predictions on the test data and the accuracy of those predictions are tested. A function will be needed for determining accuracy by thrteshold.
+
+```{r}
+#Make predictions from train
+pred.test <- predict(train.out,test,type = "response")
+#Create function for determining accuracy by threshold
+threshhold <- 0.5
+thresh.function <- function(threshhold){
+  pred.status <- cut(pred.test, breaks=c(-Inf, threshhold, Inf), 
+      labels=c("Pred.Bad", "Pred.Good")) 
+  cTab <- table(test$status, pred.status) 
+  addmargins(cTab)
+  p <- sum(diag(cTab)) / sum(cTab) 
+  print(paste('Proportion correctly predicted = ', p)) 
+}
+
+#addmargins(cTab)
+#print(paste('Proportion correctly predicted = ', p)) 
+
+```
+
+
+### Predictions from current model
+
+The data preparation stage set the baseline for the modeling activities completed here. The variables and values within, cleaned and transformed, were randomly divided into the test and train datasets that are to be used in the model. The full model with all predictors was fit from the train dataset and assigned to an object. The step function ran on this object has indicated the best fit model was one that would reduce the predictor count from 28 to 21. This reduced and best fit model was used to make predictions on the status variable for good or bad loans. Using a threshold of 0.5 to classify the “Good” and “Bad” loans, the table above revealed a proportion of correctly predicted loans. The model was able to identify 74% of loans accurately. Additionally, the classification table shows that 633 out of 1334 bad loans were correctly predicted. While 4187 out of 5161 good loans were predicted correctly. With 47% of bad loans being predicted correctly and 81% of good loans being predicted correctly, we can see that the model performs far better when predicting good loans. Given the proportion of correctly predicted loans by the model, it can be assumed that it is an effective model for predicting if a loan will be repaid.
+
+### Optimizing the threshold for accuracy
+
+The previous predictions used a classification threshold of 0.5 to determine proportions of correct predictions. In an effort to determine the optimal threshold, variations of the threshold were considered as well as its affect on the models ability to make predictions when applied to the train data.
+
+#### Plot of thresholds and corresponding proportion of correctly predicted loans status
+
+```{r}
+#Determine proportion for each threshold iterating thru 0 to 1 by tenths
+x <- c(.1,.2,.3,.4,.5,.6,.7,.8,.9)
+sapply(x,thresh.function)
+
+```
+Assign the determined threshold accuracies and plot them
+
+```{r, fig.width=6,fig.height=2, echo=FALSE}
+threshold <- c(.1,.2,.3,.4,.5,.6,.7,.8,.9)
+proportion <- c(.7946,.7946,.7957,.8,.8009,.7835,.7421,.6220,.4097)
+P20 <- qplot(threshold,proportion)
+grid.arrange(P20, nrow=1,
+             top= "Accuracy proportions by threshold")
+
+```
+
+After producing proportions of correctly predicted loans per each threshold ranging in tenths from 0 to 1 the above plot was set to visualize the findings. We can see that the threshold with the highest proportion of correctly predicted loans is still 0.5 with an accuracy of .8009. 0.1 to 0.6 remain pretty high in terms of the proportions shown. Any threshold greater than 0.6 shows a steep decline with 0.9 being the lowest at .4097. 
+
+### Optimizing the Threshold for Profit
+
+We previously found the optimal threshold for determining the largest proportion of correct predictions. The study being conducted for the bank is interested in knowing how these predictions can affect profit. We will next fit the model with test data to make our determinations on profit.
+
+#### New variables
+
+New variables will be created to assist in determining profit. We will need to account profit for the loans that are predicted to be in bad standing and also account for profit for the loans that are in good standing in test. These new variables will assist in that summation.
+
+```{r}
+#Append predicted and profit data to test
+threshhold2 <- 0.7
+test$predtest <- predict(train.out,test,type="response")
+test$profit <- test$totalPaid - test$amount
+#Append determination for predtest as being either above or below threshold
+test <-
+  test %>%
+  mutate(above.thresh = as.factor(case_when(
+    predtest >= threshhold2 ~ 1,
+    TRUE ~ 0
+  )))
+```
+
+
+#### Review of model
+
+Now that there are the proper variables in place to account for profit, we will explore the differences between the model and actual data. We will also explore the differences we find at the different thresholds used in the model in order to determine, not only accuracy, but also the optimal threshold for maximizing profit. 
+
+```{r, results="hide"}
+#Sum profit of from test
+test %>%
+  group_by(status) %>%
+  summarise(profit = sum(profit))
+#Sum profit of from predicition
+test %>%
+  group_by(above.thresh) %>%
+  summarise(predprofit = sum(profit))
+```
+
+#### New vectors to document findings
+
+Take the values returned from the sums and proportion and assign them to an object for analysis.
+
+```{r}
+#Create variable to explore profit
+profits <- c(1942404	, 1942404 , 2014715 , 2401506 , 3070840 , 3368730 , 3830402 , 3197174 , 1483589)
+
+```
+
+### Results Summary
+
+To review; the initial dataset of 50000 observations and 37 variables has been cleaned and reviewed. Initial data exploration revealed some issues that were apparent in the dataset. These identified issues have been dealt with by removing them all together or by transformation. This final new cleaned dataset has been explored and assumptions have been made that it is appropriate for this analysis. The final cleaned data set was used to determine what predictors were to be included in the model. Issues with colllinearity were dealt with and some model optimization was conducted using VIF and step procedures to ensure the best model was used. This final model was fit by both test and train data, split at random, and ran. We explored thresholds on the training model and found 0.5 be to the optimal threshold for the highest proportion of accurate predictions. Proceeding with test data we now want to investigate our initial reason of the study: Can banks use logistic modeling to predict good and bad loans and can these predictions be used to maximize profit? The application of the test dataset to the final model can evidence our findings.
+
+The above section discovered profit and proportion of accurately predicted loans based on given thresholds. The classification table shows that 633 out of 1334 bad loans were correctly predicted at the .7 threshold. The table also shows that 4187 out of 5161 good loans were predicted correctly. With 47% of bad loans being predicted correctly and 81% of good loans being predicted correctly, we can see that the model performs better at predicting good loans. Additional findings are as follows:
+
+#### Summary of accuracy
+
+```{r, echo=FALSE}
+#Summarise findigs 
+summary(proportion)
+
+```
+
+The above summary displays the proportions of correctly predicted loans status from the model when applied to the test data. We find a minimum 0.4097 and maximum 0.8009 proportion of accuracy for this model with test data. This is in accordance with the accuracy of the model when applied to the train data. 
+
+#### Plot of thresholds and profits
+
+```{r,fig.width=6, fig.height=2,echo=FALSE}
+P21 <- qplot(threshold,proportion) 
+P22 <- qplot(threshold,profits)
+grid.arrange(P21, P22, nrow=1,
+             top= "Accuracy proportions and profits by threshold")
+
+```
+
+To illustrate the model performance the above plots are for accuracy and profitability. We can see, as the test data applied to the model revealed, that the optimal threshold for accuracy is 0.5 with any threshold greater than that having diminishing returns for accuracy. The profit plot illustrates the threshold which yields the highest profits. The plot reveals the threshold of 0.7 to be the optimal threshold for profit at 3,830,402 dollars. The 0.7 threshold also has an accuracy of predicting 74% correctly overall; specifically the model was able to predict 633 out of 1334 bad laons predicted correctly giving it 47% accuracy in this classification. And 4187 out of 5161 good loans predicted correctly giving it 81% accuracy in this classification.
+
+#### Summary of profit
+
+```{r}
+#Sum profit of from test
+test %>%
+  group_by(status) %>%
+  summarise(profit = sum(profit))
+
+```
+
+The above summary exhibits the profits related to good and bad loans that are contained in the test dataset. We can see in the actual data that bad loans cost the bank 10,066,799 dollars and the good loans made the bank a profit of 12,009,203 dollars. That is a total profit of -10,066,799 + 12,009,203 = 1,942,404. This is the toal profit the bank would make if they were to continue as they are and do not apply any model
+
+#### Summary of predicted profit
+
+```{r,echo=FALSE}
+summary(profits)
+
+```
+
+The above summary illustrates the profits associated with predictions made by the model. We can see that the minimum profit here when using the model is 1,483,589 dollars. The models maximum profit is 3,830,402 dollars as compared to the current profits shown in actual data with a max of 1,942,404 dollars.
+
+## Conclusion
+
+The model performs best at a threshold of 0.5 for accuracy of predictions and performs better when predicting good loans as compared to bad loan predictions. The accuracy of the model at the threshold of 0.5, correctly predicts a proportion of 80% of the loans. We see this as the optimal threshold for accuracy. 
+
+When we begin to examine the models implications on the profitability of loans for banks, we begin to discover a different story. The optimal threshold for profit is .7 which still has an accuracy of 74% correctly overall. This is only a slight reduction from the .5 threshold with its 80% accuracy. 
+
+We also find that the .7 threshold performs better at the prediction of good loans as compared to bad laons; with 47% of bad loans being predicted correctly and 81% of good loans being predicted correctly. 
+
+What we find ultimately, is the actual data reveals that the bank has less profit if they were to not use the model; the actual data revealing profits from good loans being 1,942,404 dollars and the profit with deploying the model being 3,830,402 dollars. If the bank was to deploy this model they would find a profit of nearly twice what they current recieve without deployment. Given this information, this study would recommend the use of this model for the purpose of increasing profit. 
+
+
+
+
+
